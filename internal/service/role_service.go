@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -119,7 +120,7 @@ func (s *RoleService) GroupByWorkspace(items []unstructured.Unstructured) map[st
 		}
 
 		name := item.GetName()
-		uid := string(item.GetUID())
+		//uid := string(item.GetUID())
 		workspace := item.GetLabels()["kubesphere.io/workspace"]
 		desc := parseZhDescription(
 			item.GetAnnotations()["kubesphere.io/description"],
@@ -129,7 +130,7 @@ func (s *RoleService) GroupByWorkspace(items []unstructured.Unstructured) map[st
 		}
 
 		result[ws][name] = model.Role{
-			RoleCode:        uid,
+			RoleCode:        name,
 			RoleName:        name,
 			RoleDescription: desc,
 		}
@@ -181,7 +182,8 @@ func DiffRoles(current, last map[string]model.Role) (
 			continue
 		}
 
-		if cur.RoleDescription != old.RoleDescription {
+		// 动态计算并比较哈希值
+		if calculateRoleHash(cur) != calculateRoleHash(old) {
 			toUpdate = append(toUpdate, cur)
 		}
 	}
@@ -321,6 +323,7 @@ func (s *RoleService) CreateRemoteRole(ws string, r model.Role) error {
 
 	output, _ := json.MarshalIndent(body, "", "  ")
 	fmt.Println(string(output))
+	s.applyBatch(nil, []model.Role{body}, "")
 
 	return nil
 }
@@ -336,12 +339,14 @@ func (s *RoleService) UpdateRemoteRole(ws string, r model.Role) error {
 
 	output, _ := json.MarshalIndent(body, "", "  ")
 	fmt.Println(string(output))
+	s.applyBatch(nil, []model.Role{body}, "")
 
 	return nil
 }
 
 func (s *RoleService) DeleteRemoteRole(ws, roleCode string) error {
 	log.Println("REMOTE DELETE:", ws, roleCode)
+	s.applyBatch(nil, nil, roleCode)
 	return nil
 }
 
@@ -368,20 +373,29 @@ func parseZhDescription(raw string) string {
 }
 
 func (s *RoleService) applyBatch(
-	ws string,
-	create, update, del []model.Role,
+	create, update []model.Role, del string,
 ) error {
 
-	if len(create)+len(update) > 0 {
+	if len(create) > 0 {
 
-		body := map[string]interface{}{
-			"workspace": ws,
-			"upsert":    append(create, update...),
-		}
+		body := interface{}(create)
 
 		if err := s.httpClient.DoJSON(
 			"POST",
-			s.baseURL+"/roles/batchUpsert",
+			s.baseURL+"/openapi_v2/scim/AppRole",
+			body,
+		); err != nil {
+			return err
+		}
+	}
+
+	if len(update) > 0 {
+
+		body := interface{}(update)
+
+		if err := s.httpClient.DoJSON(
+			"PUT",
+			s.baseURL+"/openapi_v2/scim/AppRole",
 			body,
 		); err != nil {
 			return err
@@ -390,19 +404,25 @@ func (s *RoleService) applyBatch(
 
 	if len(del) > 0 {
 
-		body := map[string]interface{}{
-			"workspace": ws,
-			"delete":    del,
-		}
-
+		roleCode := del
+		log.Println("REMOTE DELETE:", roleCode)
 		if err := s.httpClient.DoJSON(
 			"POST",
-			s.baseURL+"/roles/batchDelete",
-			body,
-		); err != nil {
+			s.baseURL+"/openapi_v2/scim/AppRole/"+roleCode,
+			nil); err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+// calculateRoleHash 计算角色的哈希值
+func calculateRoleHash(role model.Role) string {
+	// 使用SHA256算法计算哈希
+	h := sha256.New()
+	h.Write([]byte(role.RoleCode))
+	h.Write([]byte(role.RoleName))
+	h.Write([]byte(role.RoleDescription))
+	return fmt.Sprintf("%x", h.Sum(nil))
 }

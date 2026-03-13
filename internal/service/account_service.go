@@ -262,55 +262,67 @@ func (s *AccountService) aggregateRoles(userMap map[string]*model.Account, wrbIt
 		}
 	}
 
-	// 转换为 slice
-	for username, roleSet := range roleCache {
-		for role := range roleSet {
-			userMap[username].RoleCode = append(userMap[username].RoleCode, role)
+	// 转换为 slice，并为没有角色的用户设置默认角色
+	for username, account := range userMap {
+		if roleSet, exists := roleCache[username]; exists && len(roleSet) > 0 {
+			// 用户有角色，转换为 slice
+			for role := range roleSet {
+				account.RoleCode = append(account.RoleCode, role)
+			}
+		} else {
+			// 用户没有角色，设置默认角色
+			account.RoleCode = append(account.RoleCode, "no-access")
 		}
 	}
 }
 
 func (s *AccountService) output(userMap map[string]*model.Account, pageNum, pageSize int) {
-
+	// 将map转换为slice
 	accounts := make([]model.Account, 0, len(userMap))
-
 	for _, v := range userMap {
 		accounts = append(accounts, *v)
 	}
 
+	// 按用户名排序
 	sort.Slice(accounts, func(i, j int) bool {
 		return accounts[i].AccountName < accounts[j].AccountName
 	})
 
+	// 计算总页数
 	totalCount := len(accounts)
 	totalPage := 0
 	if totalCount > 0 {
 		totalPage = (totalCount + pageSize - 1) / pageSize
 	}
 
+	// 如果请求的页码超出范围，设置为最后一页
 	if pageNum > totalPage && totalPage != 0 {
 		pageNum = totalPage
 	}
 
-	start := (pageNum - 1) * pageSize
-	end := start + pageSize
+	// 输出所有页的数据
+	for page := 1; page <= totalPage; page++ {
+		// 计算当前页的起始和结束索引
+		start := (page - 1) * pageSize
+		end := start + pageSize
 
-	if start > totalCount {
-		start = totalCount
-	}
-	if end > totalCount {
-		end = totalCount
-	}
+		// 确保索引不越界
+		if end > totalCount {
+			end = totalCount
+		}
 
-	result := model.AccountsWrapper{
-		TotalCount: totalCount,
-		PageNum:    pageNum,
-		TotalPage:  totalPage,
-		Accounts:   accounts[start:end],
-	}
+		// 构建结果
+		result := model.AccountsWrapper{
+			TotalCount: totalCount,
+			PageNum:    page,
+			TotalPage:  totalPage,
+			Accounts:   accounts[start:end],
+		}
 
-	output, _ := json.MarshalIndent(result, "", "  ")
-	fmt.Println(string(output))
+		// 输出JSON格式结果
+		output, _ := json.MarshalIndent(result, "", "  ")
+		fmt.Println(string(output))
+	}
 }
 
 func (s *AccountService) sendBatch(
@@ -324,7 +336,7 @@ func (s *AccountService) sendBatch(
 
 	return s.httpClient.DoJSON(
 		"POST",
-		s.baseURL+"/accounts/batchUpsert",
+		s.baseURL+"/openapi_v2/scim/AppAccountsUpload",
 		body,
 	)
 }

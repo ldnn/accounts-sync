@@ -43,7 +43,6 @@ func NewHTTPClient(qps int, appId, secret string) *HTTPClient {
 }
 
 func (c *HTTPClient) DoJSON(method, url string, body interface{}) error {
-
 	<-c.limiter
 
 	data, err := json.Marshal(body)
@@ -56,15 +55,29 @@ func (c *HTTPClient) DoJSON(method, url string, body interface{}) error {
 	for i := 0; i < 4; i++ {
 		timestamp := strconv.FormatInt(time.Now().Unix(), 10)
 
-		req, _ := http.NewRequest(method, url, bytes.NewBuffer(data))
+		req, err := http.NewRequest(method, url, bytes.NewBuffer(data))
+		if err != nil {
+			lastErr = err
+			time.Sleep(time.Duration(math.Pow(2, float64(i))) * time.Second)
+			continue
+		}
+
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("X-App-Token", c.generateToken(timestamp))
 		req.Header.Set("X-App-Id", c.appId)
 		req.Header.Set("X-Timestamp", timestamp)
 
 		resp, err := c.client.Do(req)
-		if err == nil && resp.StatusCode < 500 {
+		fmt.Println(err) // 打印一个空行，以便在输出中分隔请求和响应
+		if err != nil {
+			lastErr = err
+			time.Sleep(time.Duration(math.Pow(2, float64(i))) * time.Second)
+			continue
+		}
 
+		fmt.Println("Response Status Code:", resp.StatusCode) // 移到这里，确保resp不为nil
+
+		if resp.StatusCode < 500 {
 			defer resp.Body.Close()
 
 			if resp.StatusCode >= 300 {
@@ -74,11 +87,9 @@ func (c *HTTPClient) DoJSON(method, url string, body interface{}) error {
 			return nil
 		}
 
-		if resp != nil {
-			resp.Body.Close()
-		}
+		resp.Body.Close()
 
-		lastErr = err
+		lastErr = fmt.Errorf("server error with status code: %d", resp.StatusCode)
 		time.Sleep(time.Duration(math.Pow(2, float64(i))) * time.Second)
 	}
 
