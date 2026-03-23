@@ -1,2 +1,3 @@
 package service
-const cacheDir = "/data/cache"
+
+const dataDir = "/data/cache"

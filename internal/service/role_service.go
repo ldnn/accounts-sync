@@ -21,8 +21,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
-// const cacheDir = "/data/cache"
-
 type RoleService struct {
 	httpClient *client.HTTPClient
 	baseURL    string
@@ -202,7 +200,7 @@ func DiffRoles(current, last map[string]model.Role) (
 ////////////////////////////////////////////////////////////////
 
 func cacheFile(ws string) string {
-	return filepath.Join(cacheDir,"/role", ws+".json")
+	return filepath.Join(dataDir, "/role", ws+".json")
 }
 
 func LoadWorkspaceRoles(ws string) (map[string]model.Role, error) {
@@ -248,6 +246,8 @@ func SaveWorkspaceRoles(ws string, roles map[string]model.Role) error {
 ////////////////////////////////////////////////////////////////
 
 func (s *RoleService) CleanupDeletedWorkspaces(current map[string]map[string]model.Role) error {
+
+	cacheDir := filepath.Join(dataDir, "/role")
 
 	if _, err := os.Stat(cacheDir); os.IsNotExist(err) {
 		if err := os.MkdirAll(cacheDir, 0755); err != nil {
@@ -347,7 +347,6 @@ func (s *RoleService) UpdateRemoteRole(ws string, r model.Role) error {
 		return err
 	}
 
-
 	return nil
 }
 
@@ -435,4 +434,3 @@ func calculateRoleHash(role model.Role) string {
 	h.Write([]byte(role.RoleDescription))
 	return fmt.Sprintf("%x", h.Sum(nil))
 }
-

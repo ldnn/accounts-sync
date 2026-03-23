@@ -2,15 +2,15 @@ package service
 
 import (
 	"context"
-        "path/filepath"
+	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
-        "strings"
-        "encoding/json"
 
 	"accounts-sync/internal/client"
 	"accounts-sync/internal/k8s"
@@ -25,7 +25,7 @@ import (
 const (
 	maxPageSize  = 200
 	k8sBatchSize = 1000
-	batchFile = "batch.yaml"
+	batchFile    = "batch.yaml"
 )
 
 type AccountService struct {
@@ -309,7 +309,6 @@ func (s *AccountService) output(userMap map[string]*model.Account, pageNum, page
 		pageNum = totalPage
 	}
 
-	
 	batchNo, err := NextBatch()
 	if err != nil {
 		panic(err)
@@ -382,12 +381,14 @@ func lastDate() string {
 	lastDay := time.Date(year+1, 1, 1, 0, 0, 0, 0, time.UTC).
 		AddDate(0, 0, -1)
 	lastTime := lastDay.Format(time.RFC3339)
-        return lastTime
+	return lastTime
 }
 
-
 func NextBatch() (string, error) {
-	path := filepath.Join(cacheDir,"/batch", batchFile)
+
+	cacheDir := filepath.Join(dataDir, "/batch")
+
+	path := filepath.Join(cacheDir, batchFile)
 
 	// 确保目录存在
 	if err := os.MkdirAll(cacheDir, 0755); err != nil {
@@ -421,7 +422,7 @@ func NextBatch() (string, error) {
 	}
 
 	// 两位格式
-	batchStr := fmt.Sprintf("%s%02d", today,batch)
+	batchStr := fmt.Sprintf("%s%02d", today, batch)
 
 	// 写入格式：日期,批次号
 	content := fmt.Sprintf("%s,%d", today, batch)
