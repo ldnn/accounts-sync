@@ -15,6 +15,7 @@ type Account struct {
 }
 
 type AccountsWrapper struct {
+	BatchNo    string    `json:"batchNo"`
 	TotalCount int       `json:"totalCount"`
 	PageNum    int       `json:"pageNum"`
 	TotalPage  int       `json:"totalPage"`
@@ -26,3 +27,4 @@ type Role struct {
 	RoleName        string `json:"roleName"`
 	RoleDescription string `json:"roleDescription"`
 }
+

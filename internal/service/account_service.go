@@ -2,13 +2,15 @@ package service
 
 import (
 	"context"
-	"encoding/json"
+        "path/filepath"
 	"fmt"
 	"os"
 	"sort"
 	"strconv"
 	"sync"
 	"time"
+        "strings"
+        "encoding/json"
 
 	"accounts-sync/internal/client"
 	"accounts-sync/internal/k8s"
@@ -23,6 +25,7 @@ import (
 const (
 	maxPageSize  = 200
 	k8sBatchSize = 1000
+	batchFile = "batch.yaml"
 )
 
 type AccountService struct {
@@ -198,12 +201,18 @@ func (s *AccountService) buildAccounts(items []unstructured.Unstructured) map[st
 		activeDate := annotations["identity-syncer.kubesphere.io/sync-time"]
 		if activeDate == "" {
 			activeDate = "none"
+		} else {
+			// 如果不为空，进行格式转换
+			activeDate = formatTimeToUTCZ(activeDate)
 		}
 
 		expire := annotations["identity-syncer.kubesphere.io/account-deadline"]
 		if expire == "" {
-			expire = "none"
+			expire = lastDate()
 
+		} else {
+			// 如果不为空，进行格式转换
+			expire = formatTimeToUTCZ(expire)
 		}
 
 		state, _, _ := unstructured.NestedString(item.Object, "status", "state")
@@ -219,7 +228,7 @@ func (s *AccountService) buildAccounts(items []unstructured.Unstructured) map[st
 			PhoneNumber: phone,
 			ActiveDate:  activeDate,
 			ExpireDate:  expire,
-			Created:     item.GetCreationTimestamp().Time.Format(time.RFC3339),
+			Created:     formatTimeToUTCZ(item.GetCreationTimestamp().Time.Format(time.RFC3339)),
 			RoleCode:    make([]string, 0, 4), // 预分配
 		}
 	}
@@ -300,6 +309,12 @@ func (s *AccountService) output(userMap map[string]*model.Account, pageNum, page
 		pageNum = totalPage
 	}
 
+	
+	batchNo, err := NextBatch()
+	if err != nil {
+		panic(err)
+	}
+
 	// 输出所有页的数据
 	for page := 1; page <= totalPage; page++ {
 		// 计算当前页的起始和结束索引
@@ -313,6 +328,7 @@ func (s *AccountService) output(userMap map[string]*model.Account, pageNum, page
 
 		// 构建结果
 		result := model.AccountsWrapper{
+			BatchNo:    batchNo,
 			TotalCount: totalCount,
 			PageNum:    page,
 			TotalPage:  totalPage,
@@ -322,21 +338,103 @@ func (s *AccountService) output(userMap map[string]*model.Account, pageNum, page
 		// 输出JSON格式结果
 		output, _ := json.MarshalIndent(result, "", "  ")
 		fmt.Println(string(output))
+		// 发送当前页
+		if err := s.sendBatch(result); err != nil {
+			fmt.Printf("发送第 %d 页失败: %v\n", page, err)
+			// 根据需求决定是否重试或停止
+			continue
+		}
+
+		// 可选：在发送之间加一点延迟，避免请求过快
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 
 func (s *AccountService) sendBatch(
-	ctx context.Context,
-	accounts []model.Account,
+	pageData model.AccountsWrapper,
 ) error {
-
-	body := map[string]interface{}{
-		"accounts": accounts,
-	}
-
 	return s.httpClient.DoJSON(
 		"POST",
 		s.baseURL+"/openapi_v2/scim/AppAccountsUpload",
-		body,
+		pageData,
 	)
+}
+
+func formatTimeToUTCZ(timeStr string) string {
+	if timeStr == "" || timeStr == "none" {
+		return timeStr // 保留原样，让后续逻辑处理空值或"none"
+	}
+	// 尝试解析常见的时间格式，这里以 RFC3339 为例，你的时间看起来符合这个格式
+	t, err := time.Parse(time.RFC3339, timeStr)
+	if err != nil {
+		// 如果解析失败，记录日志并返回原字符串，避免程序崩溃
+		// 在实际代码中，可以考虑使用 log.Printf 记录错误
+		fmt.Printf("警告: 解析时间字符串 '%s' 失败: %v\n", timeStr, err)
+		return timeStr
+	}
+	// 转换为 UTC 并格式化为 "2021-08-23T04:56:22Z" 形式
+	return t.UTC().Format("2006-01-02T15:04:05Z")
+}
+
+func lastDate() string {
+	now := time.Now().UTC()
+	year := now.Year()
+	lastDay := time.Date(year+1, 1, 1, 0, 0, 0, 0, time.UTC).
+		AddDate(0, 0, -1)
+	lastTime := lastDay.Format(time.RFC3339)
+        return lastTime
+}
+
+
+func NextBatch() (string, error) {
+	path := filepath.Join(cacheDir,"/batch", batchFile)
+
+	// 确保目录存在
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		return "", err
+	}
+
+	today := time.Now().Format("20060102") // 如 20260320
+
+	var lastDate string
+	var lastBatch int
+
+	data, err := os.ReadFile(path)
+	if err == nil {
+		parts := strings.Split(strings.TrimSpace(string(data)), ",")
+		if len(parts) == 2 {
+			lastDate = parts[0]
+			lastBatch, _ = strconv.Atoi(parts[1])
+		}
+	} else if !os.IsNotExist(err) {
+		return "", err
+	}
+
+	var batch int
+
+	if lastDate == today {
+		// 同一天 → +1
+		batch = lastBatch + 1
+	} else {
+		// 新的一天 → 重置为 1
+		batch = 1
+	}
+
+	// 两位格式
+	batchStr := fmt.Sprintf("%s%02d", today,batch)
+
+	// 写入格式：日期,批次号
+	content := fmt.Sprintf("%s,%d", today, batch)
+
+	// 原子写入
+	tmpFile := path + ".tmp"
+	if err := os.WriteFile(tmpFile, []byte(content), 0644); err != nil {
+		return "", err
+	}
+
+	if err := os.Rename(tmpFile, path); err != nil {
+		return "", err
+	}
+
+	return batchStr, nil
 }

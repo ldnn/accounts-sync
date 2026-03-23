@@ -21,7 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
-// const cacheDir = "/data/cache"
+const cacheDir = "/data/cache"
 
 type RoleService struct {
 	httpClient *client.HTTPClient
@@ -202,7 +202,7 @@ func DiffRoles(current, last map[string]model.Role) (
 ////////////////////////////////////////////////////////////////
 
 func cacheFile(ws string) string {
-	return filepath.Join(cacheDir,"/role", ws+".json")
+	return filepath.Join(cacheDir, ws+".json")
 }
 
 func LoadWorkspaceRoles(ws string) (map[string]model.Role, error) {
@@ -323,10 +323,7 @@ func (s *RoleService) CreateRemoteRole(ws string, r model.Role) error {
 
 	output, _ := json.MarshalIndent(body, "", "  ")
 	fmt.Println(string(output))
-	err := s.applyBatch("POST", body)
-	if err != nil {
-		return err
-	}
+	s.applyBatch("POST", body)
 
 	return nil
 }
@@ -342,11 +339,7 @@ func (s *RoleService) UpdateRemoteRole(ws string, r model.Role) error {
 
 	output, _ := json.MarshalIndent(body, "", "  ")
 	fmt.Println(string(output))
-	err := s.applyBatch("PUT", body)
-	if err != nil {
-		return err
-	}
-
+	s.applyBatch("PUT", body)
 
 	return nil
 }
@@ -359,11 +352,7 @@ func (s *RoleService) DeleteRemoteRole(ws string, r model.Role) error {
 	}
 
 	log.Println("REMOTE DELETE:", ws, r.RoleCode)
-	err := s.applyBatch("DELETE", body)
-	if err != nil {
-		return err
-	}
-
+	s.applyBatch("DELETE", body)
 	return nil
 }
 

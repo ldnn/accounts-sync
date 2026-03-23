@@ -66,6 +66,12 @@ func (c *HTTPClient) DoJSON(method, url string, body interface{}) error {
 		req.Header.Set("X-App-Token", c.generateToken(timestamp))
 		req.Header.Set("X-App-Id", c.appId)
 		req.Header.Set("X-Timestamp", timestamp)
+                
+                fmt.Println("=== 请求调试信息 ===")
+                fmt.Printf("X-App-Token: %s\n", c.generateToken(timestamp))
+                fmt.Printf("URL: %s\n", url)
+                fmt.Printf("Method: %s\n", method)
+                fmt.Printf("Request Body: %s\n", string(data))
 
 		resp, err := c.client.Do(req)
 		fmt.Println(err) // 打印一个空行，以便在输出中分隔请求和响应
@@ -99,8 +105,8 @@ func (c *HTTPClient) DoJSON(method, url string, body interface{}) error {
 func (c *HTTPClient) generateToken(timestamp string) string {
 
 	data := fmt.Sprintf("%s%s%s", c.appId, c.secret, timestamp)
-	hash := sha256.Sum256([]byte(data))
-	return hex.EncodeToString(hash[:])
+	hash := sha256Hash(data)
+	return hash
 }
 
 func sha256Hash(data string) string {
