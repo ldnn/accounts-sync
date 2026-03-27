@@ -1,5 +1,11 @@
 package model
 
+import (
+	"strings"
+	"unicode"
+)
+
+
 type Account struct {
 	AccountId   string   `json:"accountId"`
 	AccountName string   `json:"accountName"`
@@ -28,3 +34,50 @@ type Role struct {
 	RoleDescription string `json:"roleDescription"`
 }
 
+type AppAccountDiffResponse struct {
+        TotalResults int               `json:"totalResults"`
+	StartIndex   int               `json:"startIndex"`
+	ItemsPerPage int               `json:"itemsPerPage"`
+	Resources []ResourceAccount `json:"Resources"`
+}
+
+type ResourceAccount struct {
+	AppAccount
+	DiffType string `json:"diffType"`
+}
+
+type AppAccount struct {
+	AccountName string   `json:"accountName"`
+	Enable      bool     `json:"enable"`
+	PhoneNumber string   `json:"phone"`
+	ExpireDate  string   `json:"expireDate"`
+	RoleCode    []string `json:"roleCodes"`
+}
+
+func (a *AppAccount) Mobile() string {
+	return NormalizePhone(a.PhoneNumber)
+}
+
+func NormalizePhone(phone string) string {
+	// 1. 只保留数字
+	var digits []rune
+	for _, r := range phone {
+		if unicode.IsDigit(r) {
+			digits = append(digits, r)
+		}
+	}
+
+	num := string(digits)
+
+	// 2. 去掉国家码 86
+	if strings.HasPrefix(num, "86") && len(num) > 11 {
+		num = num[2:]
+	}
+
+	// 3. 如果长度大于11，取最后11位
+	if len(num) > 11 {
+		num = num[len(num)-11:]
+	}
+
+	return num
+}

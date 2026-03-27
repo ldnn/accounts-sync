@@ -5,14 +5,15 @@ import (
 	"log"
 	"time"
 
-	"accounts-sync/internal/client"
-	"accounts-sync/internal/service"
-	"accounts-sync/internal/config"
+	"accounts-syncer/internal/client"
+	"accounts-syncer/internal/config"
+	"accounts-syncer/internal/service"
 )
 
 type App struct {
 	roleSvc    *service.RoleService
 	accountSvc *service.AccountService
+	stateSync  *service.StateSyncService
 }
 
 func NewApp() *App {
@@ -22,21 +23,29 @@ func NewApp() *App {
 	return &App{
 		roleSvc:    service.NewRoleService(httpClient, cfg.BaseURL),
 		accountSvc: service.NewAccountService(httpClient, cfg.BaseURL),
+		stateSync:  service.NewStateSyncService(httpClient, cfg.BaseURL),
 	}
 }
 
 func (a *App) Run(ctx context.Context) error {
+
+	if err := a.stateSync.AccountsStateSync(ctx); err != nil {
+		return err
+	}
+
+	log.Println("accounts state sync finished")
+
 	if err := a.roleSvc.SyncAllWorkspaces(ctx); err != nil {
 		return err
 	}
 
-	log.Println("roles sync finished")
+	log.Println("roles upload finished")
 
 	if err := a.accountSvc.SyncAccounts(ctx); err != nil {
 		return err
 	}
 
-	log.Println("accounts sync finished")
+	log.Println("accounts upload finished")
 	return nil
 }
 

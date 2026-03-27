@@ -11,9 +11,9 @@ import (
 	"strings"
 	"sync"
 
-	"accounts-sync/internal/client"
-	"accounts-sync/internal/k8s"
-	"accounts-sync/internal/model"
+	"accounts-syncer/internal/client"
+	"accounts-syncer/internal/k8s"
+	"accounts-syncer/internal/model"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
@@ -397,19 +397,19 @@ func (s *RoleService) applyBatch(
 
 	switch method {
 	case "POST":
-		err = s.httpClient.DoJSON(
+		_, err = s.httpClient.DoJSON(
 			"POST",
 			s.baseURL+"/openapi_v2/scim/AppRole",
 			body,
 		)
 	case "PUT":
-		err = s.httpClient.DoJSON(
+		_, err = s.httpClient.DoJSON(
 			"PUT",
 			s.baseURL+"/openapi_v2/scim/AppRole",
 			body,
 		)
 	case "DELETE":
-		err = s.httpClient.DoJSON(
+		_, err = s.httpClient.DoJSON(
 			"DELETE",
 			s.baseURL+"/openapi_v2/scim/AppRole"+body.RoleCode,
 			nil,

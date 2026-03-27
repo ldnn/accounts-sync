@@ -1,0 +1,76 @@
+kind: CronJob
+apiVersion: batch/v1
+metadata:
+  name: account-syncer
+  namespace: kubesphere-system
+  creationTimestamp: '2026-03-26T08:03:01Z'
+  labels:
+    app: account-syncer
+  annotations:
+    kubesphere.io/creator: admin
+spec:
+  schedule: 0 */8 * * *
+  startingDeadlineSeconds: 30
+  concurrencyPolicy: Forbid
+  suspend: false
+  jobTemplate:
+    metadata:
+      creationTimestamp: null
+      labels:
+        app: acount-syncer
+    spec:
+      parallelism: 1
+      completions: 1
+      activeDeadlineSeconds: 600
+      template:
+        metadata:
+          creationTimestamp: null
+          annotations:
+            kubesphere.io/imagepullsecrets: '{}'
+            logging.kubesphere.io/logsidecar-config: '{}'
+        spec:
+          volumes:
+            - name: host-time
+              hostPath:
+                path: /etc/localtime
+                type: ''
+            - name: volume-p5nkh6
+              persistentVolumeClaim:
+                claimName: syncer-cache
+            - name: volume-h6voe3
+              secret:
+                secretName: account-syncer-secret
+                defaultMode: 420
+          containers:
+            - name: container-npurl7
+              image: 'reposc.cloud.test/kubesphere/accounts-sync:v0.5'
+              resources:
+                limits:
+                  cpu: '1'
+                  memory: 1Gi
+                requests:
+                  cpu: 10m
+                  memory: 100Mi
+              volumeMounts:
+                - name: host-time
+                  readOnly: true
+                  mountPath: /etc/localtime
+                - name: volume-p5nkh6
+                  mountPath: /data
+                - name: volume-h6voe3
+                  readOnly: true
+                  mountPath: /etc/secrets
+              terminationMessagePath: /dev/termination-log
+              terminationMessagePolicy: File
+              imagePullPolicy: IfNotPresent
+          restartPolicy: OnFailure
+          terminationGracePeriodSeconds: 30
+          dnsPolicy: ClusterFirst
+          serviceAccountName: syncer-sa
+          serviceAccount: syncer-sa
+          securityContext:
+            runAsUser: 0
+          schedulerName: default-scheduler
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+

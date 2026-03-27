@@ -12,20 +12,14 @@ import (
 	"sync"
 	"time"
 
-	"accounts-sync/internal/client"
-	"accounts-sync/internal/k8s"
-	"accounts-sync/internal/model"
+	"accounts-syncer/internal/client"
+	"accounts-syncer/internal/k8s"
+	"accounts-syncer/internal/model"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
-)
-
-const (
-	maxPageSize  = 200
-	k8sBatchSize = 1000
-	batchFile    = "batch.yaml"
 )
 
 type AccountService struct {
@@ -200,13 +194,13 @@ func (s *AccountService) buildAccounts(items []unstructured.Unstructured) map[st
 
 		activeDate := annotations["identity-syncer.kubesphere.io/sync-time"]
 		if activeDate == "" {
-			activeDate = "none"
+			activeDate = formatTimeToUTCZ(item.GetCreationTimestamp().Time.Format(time.RFC3339))
 		} else {
 			// 如果不为空，进行格式转换
 			activeDate = formatTimeToUTCZ(activeDate)
 		}
 
-		expire := annotations["identity-syncer.kubesphere.io/account-deadline"]
+		expire := annotations["kubesphere.io/expiredate"]
 		if expire == "" {
 			expire = lastDate()
 
@@ -314,7 +308,39 @@ func (s *AccountService) output(userMap map[string]*model.Account, pageNum, page
 		panic(err)
 	}
 
-	// 输出所有页的数据
+	// 创建页面队列
+	pageQueue := make(chan model.AccountsWrapper, totalPage)
+
+	// 创建错误通道
+	errCh := make(chan error, 1)
+
+	// 创建完成信号通道
+	doneCh := make(chan struct{})
+
+	// 使用WaitGroup等待所有页面处理完成
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	// 启动消费者goroutine
+	go func() {
+		defer wg.Done()
+		for pageData := range pageQueue {
+			// 输出JSON格式结果
+			output, _ := json.MarshalIndent(pageData, "", "  ")
+			fmt.Println(string(output))
+
+			// 发送当前页
+			if _, err := s.sendBatch(pageData); err != nil {
+				fmt.Printf("发送第 %d 页失败: %v\n", pageData.PageNum, err)
+				errCh <- fmt.Errorf("发送第 %d 页失败: %v", pageData.PageNum, err)
+				return
+			}
+			// 添加延迟，确保请求之间有一定间隔
+			time.Sleep(500 * time.Millisecond)
+		}
+	}()
+
+	// 生产者：将所有页面加入队列
 	for page := 1; page <= totalPage; page++ {
 		// 计算当前页的起始和结束索引
 		start := (page - 1) * pageSize
@@ -334,24 +360,33 @@ func (s *AccountService) output(userMap map[string]*model.Account, pageNum, page
 			Accounts:   accounts[start:end],
 		}
 
-		// 输出JSON格式结果
-		output, _ := json.MarshalIndent(result, "", "  ")
-		fmt.Println(string(output))
-		// 发送当前页
-		if err := s.sendBatch(result); err != nil {
-			fmt.Printf("发送第 %d 页失败: %v\n", page, err)
-			// 根据需求决定是否重试或停止
-			continue
-		}
+		// 将页面数据加入队列
+		pageQueue <- result
+	}
 
-		// 可选：在发送之间加一点延迟，避免请求过快
-		time.Sleep(100 * time.Millisecond)
+	// 关闭队列，通知消费者没有更多数据
+	close(pageQueue)
+
+	// 等待消费者处理完成或发生错误
+	go func() {
+		wg.Wait()
+		close(doneCh)
+	}()
+
+	// 等待处理完成或错误发生
+	select {
+	case <-doneCh:
+		// 所有页面处理完成
+		fmt.Println("所有页面发送完成")
+	case err := <-errCh:
+		// 发生错误
+		fmt.Printf("处理过程中发生错误: %v\n", err)
 	}
 }
 
 func (s *AccountService) sendBatch(
 	pageData model.AccountsWrapper,
-) error {
+) ([]byte, error) {
 	return s.httpClient.DoJSON(
 		"POST",
 		s.baseURL+"/openapi_v2/scim/AppAccountsUpload",

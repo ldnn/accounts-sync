@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math"
 	"net"
 	"net/http"
 	"strconv"
@@ -25,15 +24,16 @@ func NewHTTPClient(qps int, appId, secret string) *HTTPClient {
 
 	return &HTTPClient{
 		client: &http.Client{
-			Timeout: 20 * time.Second,
+			Timeout: 60 * time.Second,
 			Transport: &http.Transport{
 				MaxIdleConns:        500,
 				MaxIdleConnsPerHost: 200,
 				IdleConnTimeout:     90 * time.Second,
 				DialContext: (&net.Dialer{
-					Timeout:   5 * time.Second,
+					Timeout:   15 * time.Second,
 					KeepAlive: 30 * time.Second,
 				}).DialContext,
+				ResponseHeaderTimeout: 45 * time.Second,
 			},
 		},
 		limiter: time.Tick(time.Second / time.Duration(qps)),
@@ -42,64 +42,110 @@ func NewHTTPClient(qps int, appId, secret string) *HTTPClient {
 	}
 }
 
-func (c *HTTPClient) DoJSON(method, url string, body interface{}) error {
+func (c *HTTPClient) DoJSON(method, url string, body interface{}) ([]byte, error) {
 	<-c.limiter
 
-	data, err := json.Marshal(body)
-	if err != nil {
-		return err
-	}
+	var err error
+	var data []byte
+	var req *http.Request
 
-	var lastErr error
+	// 添加重试逻辑，最多重试3次
+	for retry := 0; retry < 3; retry++ {
+		// 记录请求开始时间
+		startTime := time.Now()
 
-	for i := 0; i < 4; i++ {
 		timestamp := strconv.FormatInt(time.Now().Unix(), 10)
+		if body == nil {
+			req, err = http.NewRequest(method, url, nil)
+		} else {
+			data, err = json.Marshal(body)
+			if err != nil {
+				return nil, err
+			}
+			req, err = http.NewRequest(method, url, bytes.NewBuffer(data))
+		}
 
-		req, err := http.NewRequest(method, url, bytes.NewBuffer(data))
 		if err != nil {
-			lastErr = err
-			time.Sleep(time.Duration(math.Pow(2, float64(i))) * time.Second)
-			continue
+			if retry < 2 { // 不是最后一次重试
+				time.Sleep(time.Second * time.Duration(retry+1)) // 指数退避：1秒、2秒、3秒
+				continue
+			}
+			return nil, err
 		}
 
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("X-App-Token", c.generateToken(timestamp))
 		req.Header.Set("X-App-Id", c.appId)
 		req.Header.Set("X-Timestamp", timestamp)
-                
-                fmt.Println("=== 请求调试信息 ===")
-                fmt.Printf("X-App-Token: %s\n", c.generateToken(timestamp))
-                fmt.Printf("URL: %s\n", url)
-                fmt.Printf("Method: %s\n", method)
-                fmt.Printf("Request Body: %s\n", string(data))
 
+		fmt.Printf("Sending request to: %s (attempt %d)\n", url, retry+1)
 		resp, err := c.client.Do(req)
-		fmt.Println(err) // 打印一个空行，以便在输出中分隔请求和响应
 		if err != nil {
-			lastErr = err
-			time.Sleep(time.Duration(math.Pow(2, float64(i))) * time.Second)
-			continue
-		}
+			// 计算并打印请求耗时
+			duration := time.Since(startTime)
+			fmt.Printf("Request failed after %v\n", duration)
 
-		fmt.Println("Response Status Code:", resp.StatusCode) // 移到这里，确保resp不为nil
-
-		if resp.StatusCode < 500 {
-			defer resp.Body.Close()
-
-			if resp.StatusCode >= 300 {
-				b, _ := io.ReadAll(resp.Body)
-				return fmt.Errorf("remote error: %s", string(b))
+			if retry < 2 { // 不是最后一次重试
+				time.Sleep(time.Second * time.Duration(retry+1)) // 指数退避：1秒、2秒、3秒
+				continue
 			}
-			return nil
+			return nil, err
 		}
 
-		resp.Body.Close()
+		fmt.Printf("Response Status Code:%v\n", resp.StatusCode)
 
-		lastErr = fmt.Errorf("server error with status code: %d", resp.StatusCode)
-		time.Sleep(time.Duration(math.Pow(2, float64(i))) * time.Second)
+		defer resp.Body.Close()
+		respBytes, err := io.ReadAll(resp.Body)
+		if err != nil {
+			// 计算并打印请求耗时
+			duration := time.Since(startTime)
+			fmt.Printf("Request failed after %v\n", duration)
+
+			if retry < 2 { // 不是最后一次重试
+				time.Sleep(time.Second * time.Duration(retry+1)) // 指数退避：1秒、2秒、3秒
+				continue
+			}
+			return nil, err
+		}
+
+		if resp.StatusCode >= 300 {
+			fmt.Printf("Server returned error: %s\n", string(respBytes))
+
+			// 检查是否是批次正在处理中的错误，如果是则不重试
+			var errorResp struct {
+				ErrorCode string `json:"errorCode"`
+				Message   string `json:"message"`
+			}
+			if err := json.Unmarshal(respBytes, &errorResp); err == nil {
+				if errorResp.ErrorCode == "ERROR-SCIM-UPLOAD-0080" {
+					// 计算并打印请求耗时
+					duration := time.Since(startTime)
+					fmt.Printf("Request completed in %v\n", duration)
+
+					return respBytes, fmt.Errorf("remote error: %s", string(respBytes))
+				}
+			}
+
+			if retry < 2 { // 不是最后一次重试
+				time.Sleep(time.Second * time.Duration(retry+1)) // 指数退避：1秒、2秒、3秒
+				continue
+			}
+
+			// 计算并打印请求耗时
+			duration := time.Since(startTime)
+			fmt.Printf("Request completed in %v\n", duration)
+
+			return respBytes, fmt.Errorf("remote error: %s", string(respBytes))
+		}
+
+		// 计算并打印请求耗时
+		duration := time.Since(startTime)
+		fmt.Printf("Request completed in %v\n", duration)
+
+		return respBytes, nil
 	}
 
-	return fmt.Errorf("request failed: %w", lastErr)
+	return nil, fmt.Errorf("request failed after 3 retries")
 }
 
 func (c *HTTPClient) generateToken(timestamp string) string {

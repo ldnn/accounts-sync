@@ -1,0 +1,47 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  namespace: kubesphere-system
+  name: syncer-sa
+  labels:
+    app: account-syncer
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  namespace: kubesphere-system
+  name: syncer-cr
+  labels:
+    app: account-syncer
+rules:
+- apiGroups:
+  - "iam.kubesphere.io"
+  resources:
+  - users
+  - workspacerolebindings
+  - workspaceroles
+  verbs:
+  - get
+  - list
+  - watch
+  - delete
+  - create
+  - update
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  namespace: kubesphere-system
+  name: syncer-crb
+  labels:
+    app: account-syncer
+subjects:
+- kind: ServiceAccount
+  name: syncer-sa
+  namespace: kubesphere-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: syncer-cr
+
